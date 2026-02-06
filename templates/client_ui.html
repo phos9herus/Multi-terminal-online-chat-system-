@@ -762,6 +762,7 @@
         function renderMessages(msgs, clearMode = false) {
             const list = document.getElementById('msg-list');
 
+            // 清除模式：保存上传进度条，清空列表
             let tempUploads = [];
             if (clearMode) {
                 list.querySelectorAll('[id^="t_"]').forEach(el => tempUploads.push(el));
@@ -773,24 +774,33 @@
             const hideAdminGlobal = localStorage.getItem('hide_admin_global') === 'true';
 
             msgs.forEach(msg => {
-                if (currentTarget === 'global' && msg.uid === 'ADMIN' && hideAdminGlobal) return;
+                // 过滤逻辑
+                if (currentTarget === 'global' && msg.uid === 'ADMIN' && hideAdminGlobal) {
+                    return;
+                }
 
+                // 指纹去重
                 const msgFingerprint = `${msg.uid}-${msg.timestamp}-${msg.content}`;
                 if (renderedFingerprints.has(msgFingerprint)) return;
                 renderedFingerprints.add(msgFingerprint);
                 hasNewContent = true;
 
                 // 同步互动缓存
-                if (msg.reactions) reactionDataCache[msg.id] = msg.reactions;
-                else if (!reactionDataCache[msg.id]) reactionDataCache[msg.id] = {};
+                if (msg.reactions) {
+                    reactionDataCache[msg.id] = msg.reactions;
+                } else if (!reactionDataCache[msg.id]) {
+                    reactionDataCache[msg.id] = {};
+                }
 
+                // 基础变量
                 const isSelf = (msg.uid === myInfo.uid);
                 const row = document.createElement('div');
                 row.className = `message-row ${isSelf ? 'self' : 'other'}`;
+                // 使用服务端 ID 作为 DOM ID
                 const domId = `msg-${msg.id || msg.temp_id || Date.now()}`;
                 row.id = domId;
 
-                // --- 头像 ---
+                // 头像渲染
                 const avatarSrc = isSelf ?
                     (myInfo.avatar ? SERVER_URL + myInfo.avatar : `https://ui-avatars.com/api/?name=${myInfo.username}`) :
                     `${SERVER_URL}/api/avatar/${msg.uid}`;
@@ -804,12 +814,11 @@
                     avatarHtml = `<img src="${avatarSrc}" class="chat-avatar" onclick="showUserCard('${msg.uid}', '${safeSender}', '${safeAvatar}')">`;
                 }
 
-                // --- 引用块 (Embedded Quote) ---
+                // 引用块渲染 (支持图片显示为 [Image])
                 let quoteHtml = '';
                 if (msg.quote) {
-                    // 判断引用类型，优化显示
                     let qContent = msg.quote.content;
-                    // 兼容旧数据或根据 type 判断
+                    // 根据引用类型优化显示文本
                     if (msg.quote.type === 'image') qContent = '[Image]';
                     else if (msg.quote.type === 'video') qContent = '[Video]';
 
@@ -821,45 +830,35 @@
                     `;
                 }
 
-                // --- 消息内容与互动菜单逻辑 ---
+                // 内容与菜单逻辑
                 let contentHtml = '';
                 const fullMediaUrl = (msg.content && msg.content.startsWith('/uploads')) ? SERVER_URL + msg.content : msg.content;
-
-                // 安全转义
                 const safeContent = msg.content ? msg.content.replace(/'/g, "\\'") : "";
 
-                // 只有 Global 聊天且非自己发送的消息，才显示菜单
-                const showMenu = (currentTarget === 'global' && !isSelf);
-
-                // 统一的点击事件：无论文本还是图片，点击都触发菜单
-                // 注意：这里我们不传 type 给 toggleReactionMenu，因为它只负责显示菜单 div
-                // 具体的 type 传递是在下面 menuHtml 的 startQuote 按钮里处理的
+                // 只要不是自己发的消息，任何房间都允许显示菜单（支持私聊互动）
+                const showMenu = !isSelf;
                 const menuAction = showMenu ? `onclick="toggleReactionMenu('${domId}', '${msg.id}', '${msg.sender}', '${safeContent}')"` : "";
                 const cursorStyle = showMenu ? 'cursor:pointer' : '';
 
                 if (msg.type === 'image') {
-                    // 【核心修改】图片不再 window.open，而是应用 menuAction
-                    // 如果想要在自己的图片上点击查看大图，可以加个判断：isSelf ? "window.open..." : menuAction
-                    // 但根据需求“交互逻辑”，我们对他人图片统一改为出菜单
-
+                    // 图片交互逻辑
                     if (isSelf) {
-                        // 自己的图片保持点击查看大图
+                        // 自己发的图片：保持点击查看大图
                         contentHtml = `<img src="${fullMediaUrl}" class="chat-media" onclick="window.open(this.src)" loading="lazy">`;
                     } else {
-                        // 别人的图片点击弹出互动菜单
+                        // 别人发的图片：点击弹出互动菜单 (不再放大)
                         contentHtml = `<img src="${fullMediaUrl}" class="chat-media" style="${cursorStyle}" ${menuAction} loading="lazy">`;
                     }
-
                 } else if (msg.type === 'video') {
                     contentHtml = `<video src="${fullMediaUrl}" class="chat-media" controls preload="metadata"></video>`;
                 } else {
                     contentHtml = `<div class="msg-bubble" style="${cursorStyle}" ${menuAction}>${msg.content}</div>`;
                 }
 
-                // --- 互动菜单 HTML ---
+                // 互动菜单 HTML
                 let menuHtml = '';
                 if (showMenu) {
-                    // 注意：Reply 按钮现在传入了 msg.type，确保引用时知道这是图片
+                    // 注意：startQuote 增加了第4个参数 msg.type，用于正确保存引用类型
                     menuHtml = `
                         <div id="menu-${domId}" class="reaction-menu">
                             <button class="menu-btn quote-btn" title="Reply" onclick="event.stopPropagation(); startQuote('${msg.id}', '${msg.sender}', '${safeContent}', '${msg.type}')"><i class="fas fa-reply"></i></button>
@@ -871,14 +870,14 @@
                     `;
                 }
 
-                // --- 互动统计条 ---
+                // 互动统计条
                 let reactionBarHtml = `<div id="reaction-bar-${msg.id}" class="reaction-bar"></div>`;
                 const cachedReactions = reactionDataCache[msg.id] || {};
                 if (Object.keys(cachedReactions).length > 0) {
                     reactionBarHtml = `<div id="reaction-bar-${msg.id}" class="reaction-bar">${buildReactionHtml(cachedReactions)}</div>`;
                 }
 
-                // 组装
+                // --- J. 组装 ---
                 row.innerHTML = `
                     ${avatarHtml}
                     <div class="msg-content-group">
@@ -894,11 +893,14 @@
                 list.appendChild(row);
             });
 
+            // 恢复上传进度条
             if (clearMode) tempUploads.forEach(el => list.appendChild(el));
+
+            // 滚动到底部
             if (hasNewContent || clearMode) list.scrollTop = list.scrollHeight;
         }
 
-        // --- 辅助：构建互动图标 HTML ---
+        // 构建互动图标 HTML
         function buildReactionHtml(reactions) {
             const icons = { 'like': '👍', 'love': '❤️', 'question': '❓', 'dislike': '👎' };
             let html = '';
@@ -939,27 +941,30 @@
         function sendReaction(msgId, type) {
             if(!msgId) return;
 
-            // 1. 立即更新本地缓存 (乐观更新)
+            // 立即更新本地缓存 (乐观更新)
             if (!reactionDataCache[msgId]) {
                 reactionDataCache[msgId] = {};
             }
             const currentCount = reactionDataCache[msgId][type] || 0;
             reactionDataCache[msgId][type] = currentCount + 1;
 
-            // 2. 立即更新 UI
+            // 立即更新 UI
             updateMessageReactions(msgId, reactionDataCache[msgId]);
 
-            // 3. 发送网络请求
+            // 发送网络请求
             fetch('/api/send_reaction', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ msg_id: msgId, reaction_type: type })
+                body: JSON.stringify({
+                    msg_id: msgId,
+                    reaction_type: type,
+                    target_uid: currentTarget // <--- 新增：告诉服务器这是哪个房间的互动
+                })
             }).catch(err => {
                 console.error("Reaction failed:", err);
-                // 如果失败，应该回滚 (此处简化，暂不处理回滚)
             });
 
-            // 4. 关闭菜单
+            // 关闭菜单
             document.querySelectorAll('.reaction-menu').forEach(el => el.classList.remove('show'));
         }
 
