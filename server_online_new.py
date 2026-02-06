@@ -30,7 +30,7 @@ for d in [STORAGE_ROOT, MEDIA_DIR, AVATAR_DIR, LOGS_DIR]:
 
 
 #   配置区域
-NGROK_TOKEN = "39EjyqSfTr8pL1SSMvoc9qAOBuu_2eYPco4xpuGYFYiiHYXNW"
+NGROK_TOKEN = "XXXXXXXXXXXXXXXXXXXXXXX"
 JSON_BIN_ID = "b45083904e075c083709"
 JSON_BIN_URL = f"https://api.npoint.io/{JSON_BIN_ID}"
 
@@ -624,4 +624,5 @@ if __name__ == '__main__':
     start_ngrok_and_upload()
     Timer(1.5, lambda: webbrowser.open('http://127.0.0.1:5005/admin')).start()
     print("SERVER STARTED ON 5005")
+
     socketio.run(app, host='0.0.0.0', port=5005, allow_unsafe_werkzeug=True)
