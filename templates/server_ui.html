@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Server Admin</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #1a1d21; color: #ecf0f1; margin: 0; display: flex; height: 100vh; }
+        .sidebar { width: 300px; background: #2c3e50; border-right: 1px solid #34495e; padding: 10px; overflow-y: auto; display:flex; flex-direction:column;}
+        .main { flex: 1; display: flex; flex-direction: column; background: #1a1d21; }
+        .chat-container { flex: 1; padding: 20px; overflow-y: auto; }
+        .input-area { padding: 15px; background: #2c3e50; border-top: 1px solid #34495e; display: flex; gap: 10px; }
+        input { flex: 1; padding: 10px; border-radius: 4px; border: none; background: #34495e; color: white; }
+        button { padding: 10px 20px; background: #2980b9; border: none; color: white; border-radius: 4px; cursor: pointer; }
+
+        .room-card { padding: 15px; background: #34495e; border-radius: 6px; margin-bottom: 8px; cursor: pointer; border-left: 4px solid transparent; }
+        .room-card:hover { background: #465c71; }
+        .room-card.active { border-left-color: #2ecc71; background: #3e5871; }
+        .room-title { font-weight: bold; font-size: 0.95em; }
+
+        .msg-row { margin-bottom: 15px; border-bottom: 1px solid #2c3e50; padding-bottom: 10px; }
+        .msg-meta { font-size: 0.8em; color: #f39c12; margin-bottom: 5px; }
+        .msg-content { background: #2c3e50; padding: 8px 12px; border-radius: 6px; display: inline-block; }
+
+        /* 媒体预览：原生长宽比 */
+        .media-preview {
+            max-width: 400px;
+            max-height: 400px;
+            width: auto;
+            height: auto;
+            display: block;
+            margin-top: 5px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3 style="padding:0 10px;">Monitor</h3>
+        <div id="room-list"></div>
+    </div>
+    <div class="main">
+        <div class="chat-container" id="chat-box"></div>
+        <div class="input-area">
+            <input type="text" id="admin-input" placeholder="Reply as Admin...">
+            <button onclick="sendAdminMsg()">Send</button>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        let currentRoomId = 'Global Chat'; // 默认进入 Global
+        let chatLogs = {};
+
+        // 指纹集合，防止消息重复渲染
+        const renderedFingerprints = new Set();
+
+        socket.on('connect', () => {
+            socket.emit('admin_join');
+        });
+
+        socket.on('admin_update_client_list', (clients) => {
+            renderRoomList();
+        });
+
+        // 接收实时消息
+        socket.on('receive_message', (msg) => {
+            let key = 'Global Chat';
+
+            if (msg.target_uid && msg.target_uid !== 'global') {
+                if (msg.uid === 'ADMIN' || msg.target_uid === 'ADMIN') {
+                    const partner = (msg.uid === 'ADMIN') ? msg.target_uid : msg.uid;
+                    key = `ADMIN <-> ${partner}`;
+                } else {
+                    const ids = [msg.uid, msg.target_uid].sort();
+                    key = `${ids[0]} <-> ${ids[1]}`;
+                }
+            }
+
+            if (!chatLogs[key]) chatLogs[key] = [];
+            chatLogs[key].push(msg);
+
+            // 刷新左侧列表以显示新状态
+            renderRoomList();
+
+            // 如果当前正在看这个房间，增量渲染这条新消息
+            if (currentRoomId === key) {
+                renderMessages(key, false); // false = 追加模式
+            }
+        });
+
+        // 接收历史记录加载
+        socket.on('admin_history_loaded', (data) => {
+            const key = data.room_id;
+            const msgs = data.messages;
+
+            // 合并逻辑 将历史记录放在现有记录之前
+            // 简单合并可能会有重复，renderMessages 会通过指纹过滤
+            if (!chatLogs[key]) {
+                chatLogs[key] = msgs;
+            } else {
+                // 将历史记录拼接到前面，但保持时间顺序
+                // 为简单起见，这里假设 history 是更早的数据
+                chatLogs[key] = msgs.concat(chatLogs[key]);
+            }
+
+            // 如果是当前房间，强制重新渲染（因为是历史记录，插在前面，需要清空重绘）
+            if (currentRoomId === key) {
+                renderMessages(key, true); // true = 清空重绘模式
+            }
+        });
+
+        // 兼容旧的事件 (Global Chat initial load)
+        socket.on('admin_history_load', (msgs) => {
+            chatLogs['Global Chat'] = msgs;
+            if (currentRoomId === 'Global Chat') {
+                renderMessages('Global Chat', true);
+            }
+        });
+
+        function renderRoomList() {
+            const list = document.getElementById('room-list');
+            // 简单的防抖或保留滚动位置逻辑可以优化体验，这里先暴力重建
+            // 为了保留点击状态，我们可以只在列表项变化时更新，但这里简化处理
+            const existingHtml = list.innerHTML;
+
+            // 临时构建 HTML 字符串不太好绑定事件，还是用 DOM 操作
+            list.innerHTML = '';
+
+            // 始终置顶 Global
+            addCard(list, 'Global Chat', 'Global Chat');
+
+            for (let key in chatLogs) {
+                if (key === 'Global Chat') continue;
+                addCard(list, key, key);
+            }
+        }
+
+        function addCard(parent, name, id) {
+            const div = document.createElement('div');
+            div.className = `room-card ${currentRoomId === id ? 'active' : ''}`;
+            div.onclick = () => { switchRoom(id); };
+            div.innerHTML = `<div class="room-title">${name}</div>`;
+            parent.appendChild(div);
+        }
+
+        // 切换房间逻辑
+        function switchRoom(id) {
+            currentRoomId = id;
+            renderRoomList(); // 更新高亮
+
+            // 如果该房间没有记录，或者记录很少(只有实时收到的)，请求历史记录
+            if (!chatLogs[id] || chatLogs[id].length < 1) {
+                 socket.emit('admin_request_history', { room_id: id });
+            }
+
+            // 切换时先清空视图，准备渲染
+            renderMessages(id, true);
+        }
+
+        // 渲染消息 (支持增量和去重)
+        function renderMessages(key, clearMode = false) {
+            const box = document.getElementById('chat-box');
+            const msgs = chatLogs[key] || [];
+
+            if (clearMode) {
+                box.innerHTML = '';
+                renderedFingerprints.clear();
+            }
+
+            let hasNewContent = false;
+
+            msgs.forEach(msg => {
+                // 生成指纹：UID + 时间 + 内容
+                const fingerprint = `${msg.uid}-${msg.timestamp}-${msg.content}`;
+
+                if (renderedFingerprints.has(fingerprint)) return;
+                renderedFingerprints.add(fingerprint);
+                hasNewContent = true;
+
+                const div = document.createElement('div');
+                div.className = 'msg-row';
+
+                let content = msg.content;
+                if (msg.type === 'image') {
+                    // 修正图片路径，确保 admin 端也能访问 /uploads
+                    content = `<img src="${msg.content}" class="media-preview" onclick="window.open(this.src)">`;
+                } else if (msg.type === 'video') {
+                    content = `<video src="${msg.content}" class="media-preview" controls></video>`;
+                } else {
+                    // 简单的 XSS 防护：使用 textContent 或 innerText
+                    // 这里为了保持原有样式结构，暂时直接插入
+                    content = `<div class="msg-content">${msg.content}</div>`;
+                }
+
+                div.innerHTML = `
+                    <div class="msg-meta">${msg.timestamp} - ${msg.sender} (UID: ${msg.uid})</div>
+                    ${content}
+                `;
+                box.appendChild(div);
+            });
+
+            if (clearMode || hasNewContent) {
+                box.scrollTop = box.scrollHeight;
+            }
+        }
+
+        function sendAdminMsg() {
+            const input = document.getElementById('admin-input');
+            const rawText = input.value.trim();
+
+            if (!rawText) return;
+
+            const privateMatch = rawText.match(/^private@(\w+)$/);
+            if (privateMatch) {
+                const targetUid = privateMatch[1];
+                const roomKey = `ADMIN <-> ${targetUid}`;
+
+                // 如果该房间尚未在列表中，手动添加一个临时的（收到消息后会自动刷新，但为了立即跳转先添加）
+                if (!chatLogs[roomKey]) {
+                    chatLogs[roomKey] = [];
+                    // 刷新列表并选中
+                    currentRoomId = roomKey;
+                    renderRoomList();
+                    renderMessages(roomKey, true);
+                } else {
+                    switchRoom(roomKey);
+                }
+
+                input.value = ''; // 清空输入框
+                return; // 命令处理完毕，不发送消息
+            }
+
+            let target = null;
+            let contentToSend = rawText;
+
+            // 检查是否使用 @UID 格式 (例如: "@839201 警告内容")
+            // 正则：以 @ 开头，捕获数字/字符作为 UID，空格后捕获剩余内容
+            const match = rawText.match(/^@(\w+)\s+(.+)/);
+
+            if (match) {
+                target = match[1];        // 提取出的 UID
+                contentToSend = match[2]; // 实际的消息内容
+            } else {
+                //如果没有 @，则根据当前所在房间自动判断
+
+                if (currentRoomId === 'Global Chat') {
+                    target = 'global';
+                } else if (currentRoomId.includes('<->')) {
+                    const parts = currentRoomId.split(' <-> ');
+
+                    // 如果是 Admin 和某人的私聊，直接回复给对方
+                    if (parts[0] === 'ADMIN') target = parts[1];
+                    else if (parts[1] === 'ADMIN') target = parts[0];
+                    else {
+                        // 如果是用户A和用户B的私聊，Admin 必须明确指定发给谁
+                        alert("在用户私聊监控中，请使用 @UID 指定发送对象。\n示例: @123456 请注意言辞");
+                        return;
+                    }
+                }
+            }
+
+            // 发送请求
+            if (target && contentToSend) {
+                socket.emit('admin_send_message', {
+                    target_uid: target,
+                    content: contentToSend
+                });
+                input.value = ''; // 清空输入框
+            } else {
+                alert("无法确定发送目标，请检查格式或当前房间。");
+            }
+        }
+    </script>
+</body>
+</html>
