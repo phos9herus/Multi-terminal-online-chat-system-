@@ -1,3 +1,6 @@
 flask
-python-socketio
+flask-socketio
 requests
+pyngrok
+
+
