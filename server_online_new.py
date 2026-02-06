@@ -32,7 +32,7 @@ for d in [STORAGE_ROOT, MEDIA_DIR, AVATAR_DIR, LOGS_DIR]:
 #   配置区域
 # ==========================================
 NGROK_TOKEN = "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
-JSON_BIN_ID = "XXXXXXXXXXXXXXXXXXX"
+JSON_BIN_ID = "b45083904e075c083709"
 JSON_BIN_URL = f"https://api.npoint.io/{JSON_BIN_ID}"
 
 # 扩大 CSV 字段限制
@@ -604,3 +604,4 @@ if __name__ == '__main__':
     print("SERVER STARTED ON 5005")
 
     socketio.run(app, host='0.0.0.0', port=5005, allow_unsafe_werkzeug=True)
+
