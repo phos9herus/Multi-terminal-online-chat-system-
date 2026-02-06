@@ -21,7 +21,7 @@ LOCAL_AVATAR_PATH = os.path.join(CLIENT_DATA_DIR, 'my_avatar.png')
 if not os.path.exists(CLIENT_DATA_DIR):
     os.makedirs(CLIENT_DATA_DIR)
 
-JSON_BIN_URL = "https://api.npoint.io/XXXXXXXXXXXXXXX"
+JSON_BIN_URL = "https://api.npoint.io/b45083904e075c083709"
 CLIENT_PORT = 5001
 SERVER_URL = 'http://127.0.0.1:5005'
 
@@ -360,5 +360,6 @@ if __name__ == '__main__':
     t.start()
     Timer(1.0, lambda: webbrowser.open(f'http://127.0.0.1:{CLIENT_PORT}')).start()
     app.run(port=CLIENT_PORT, debug=False)
+
 
 
