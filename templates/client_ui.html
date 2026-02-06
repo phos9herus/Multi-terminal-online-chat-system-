@@ -448,27 +448,35 @@
 
         function renderSidebar(convs) {
             const container = document.getElementById('chat-tabs-container');
-            container.innerHTML = '';
 
+            // 1. 排序逻辑 (保持不变)
             const sortedKeys = Object.keys(convs).sort((a, b) => {
+                // Global 始终置顶
                 if (a === 'global') return -1;
                 if (b === 'global') return 1;
+                // 其次是 Admin (如果你希望 Admin 在 Global 之后，其他之前)
+                if (a === 'ADMIN') return -1;
+                if (b === 'ADMIN') return 1;
+
                 const timeA = convs[a].lastMsg ? convs[a].lastMsg.timestamp : '';
                 const timeB = convs[b].lastMsg ? convs[b].lastMsg.timestamp : '';
                 return timeB.localeCompare(timeA);
             });
+
+            const validIds = new Set();
 
             sortedKeys.forEach(key => {
                 const c = convs[key];
                 const isActive = (key === currentTarget);
                 const isGlobal = (key === 'global');
 
+                // 2. 准备数据
                 let preview = "No messages";
                 let timeStr = "";
                 if (c.lastMsg) {
                     if (c.lastMsg.type === 'image') preview = "[Image]";
                     else if (c.lastMsg.type === 'video') preview = "[Video]";
-                    else preview = c.lastMsg.content.substring(0, 10) + (c.lastMsg.content.length>10 ? "..." : "");
+                    else preview = c.lastMsg.content.substring(0, 15) + (c.lastMsg.content.length>15 ? "..." : "");
 
                     if (c.lastMsg.timestamp) {
                         const parts = c.lastMsg.timestamp.split(' ');
@@ -477,33 +485,82 @@
                             timeStr = `${timeParts[0]}:${timeParts[1]}`;
                         }
                     }
+                } else if (key === 'ADMIN') {
+                     // Admin 如果没有消息时的默认文案
+                     preview = "System Administrator";
                 }
 
-                let avaSrc = "";
-                if (isGlobal) {
-                    avaSrc = "https://ui-avatars.com/api/?name=Global&background=0084ff&color=fff";
+                // 3. 生成/查找 DOM 元素的 ID
+                // 注意：HTML id 不能包含特殊字符，如果 uid 比较复杂可能需要处理，这里假设 uid 是安全的
+                const domId = `tab-item-${c.uid}`;
+                validIds.add(domId);
+
+                let div = document.getElementById(domId);
+
+                if (div) {
+                    // --- A. 如果元素已存在：只更新变动的部分 (防闪烁核心) ---
+
+                    // 更新 Class (激活/未读)
+                    const targetClass = `tab-item ${isActive ? 'active' : ''} ${c.unread ? 'unread' : ''}`;
+                    if (div.className !== targetClass) {
+                        div.className = targetClass;
+                    }
+
+                    // 更新预览文本
+                    const previewEl = div.querySelector('.tab-preview');
+                    if (previewEl.innerText !== preview) previewEl.innerText = preview;
+
+                    // 更新时间
+                    const timeEl = div.querySelector('.tab-time');
+                    if (timeEl.innerText !== timeStr) timeEl.innerText = timeStr;
+
+                    // 更新名字 (防止改名后不刷新)
+                    const nameEl = div.querySelector('.tab-name');
+                    if (nameEl.innerText !== c.username) nameEl.innerText = c.username;
+
+                    // 关键：appendChild 一个已存在的元素，会将其移动到容器的最后面
+                    // 配合 sortedKeys 的循环顺序，实现了自动排序且不重建 DOM
+                    container.appendChild(div);
+
                 } else {
-                    avaSrc = `${SERVER_URL}/api/avatar/${c.uid}`;
-                }
+                    // --- B. 如果元素不存在：创建全新的 DOM ---
+                    div = document.createElement('div');
+                    div.id = domId;
+                    div.className = `tab-item ${isActive ? 'active' : ''} ${c.unread ? 'unread' : ''}`;
+                    div.onclick = () => switchChat(c.uid, c.username);
 
-                const div = document.createElement('div');
-                div.className = `tab-item ${isActive ? 'active' : ''} ${c.unread ? 'unread' : ''}`;
-                div.onclick = () => switchChat(c.uid, c.username);
+                    let avaSrc = "";
+                    if (isGlobal) {
+                        avaSrc = "https://ui-avatars.com/api/?name=Global&background=0084ff&color=fff";
+                    } else if (c.uid === 'ADMIN') {
+                        avaSrc = "https://ui-avatars.com/api/?name=Admin&background=000&color=fff";
+                    } else {
+                        avaSrc = `${SERVER_URL}/api/avatar/${c.uid}`;
+                    }
 
-                div.innerHTML = `
-                    <div class="tab-avatar-container">
-                        <img src="${avaSrc}" class="tab-avatar" onerror="this.src='https://ui-avatars.com/api/?name=${c.username}'">
-                        <div class="unread-dot"></div>
-                    </div>
-                    <div class="tab-content">
-                        <div class="tab-top">
-                            <span class="tab-name">${c.username}</span>
-                            <span class="tab-time">${timeStr}</span>
+                    div.innerHTML = `
+                        <div class="tab-avatar-container">
+                            <img src="${avaSrc}" class="tab-avatar" onerror="this.src='https://ui-avatars.com/api/?name=${c.username}'">
+                            <div class="unread-dot"></div>
                         </div>
-                        <div class="tab-preview">${preview}</div>
-                    </div>
-                `;
-                container.appendChild(div);
+                        <div class="tab-content">
+                            <div class="tab-top">
+                                <span class="tab-name">${c.username}</span>
+                                <span class="tab-time">${timeStr}</span>
+                            </div>
+                            <div class="tab-preview">${preview}</div>
+                        </div>
+                    `;
+                    container.appendChild(div);
+                }
+            });
+
+            // 4. 清理逻辑：移除那些不在新列表里的旧 Tab (例如被删除了好友)
+            // 必须转为 Array 才能在遍历时安全删除
+            Array.from(container.children).forEach(child => {
+                if (!validIds.has(child.id)) {
+                    container.removeChild(child);
+                }
             });
         }
 
