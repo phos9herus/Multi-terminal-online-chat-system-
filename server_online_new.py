@@ -24,7 +24,7 @@ MEDIA_DIR = os.path.join(STORAGE_ROOT, 'media')
 AVATAR_DIR = os.path.join(STORAGE_ROOT, 'avatars')
 LOGS_DIR = os.path.join(STORAGE_ROOT, 'chat_logs')
 REACTIONS_FILE = os.path.join(LOGS_DIR, 'reactions.csv')
-
+CSV_FILE = os.path.join(STORAGE_ROOT, 'users.csv')
 # 确保目录存在
 for d in [STORAGE_ROOT, MEDIA_DIR, AVATAR_DIR, LOGS_DIR]:
     os.makedirs(d, exist_ok=True)
@@ -46,14 +46,14 @@ socketio = SocketIO(app,
                     cors_allowed_origins="*",
                     async_mode='threading',
                     max_http_buffer_size=209715200,
-                    ping_timeout=60,
-                    ping_interval=25
+                    ping_timeout=120,
+                    ping_interval=50
                     )
 
 clients = {}  # sid -> client_info
 uid_to_sid = {}  # uid -> sid
 verification_store = {}
-CSV_FILE = 'users.csv'
+
 # uid -> {token: "xxx", expiry: timestamp}
 user_tokens = {}
 message_reactions = {}
@@ -192,10 +192,124 @@ def read_recent_logs(folder, limit=128):
 
 #   数据库简易操作
 def init_db():
+    headers = ['uid', 'username', 'password', 'avatar', 'last_ip', 'last_seen']
+
+    # 如果文件不存在，创建新表头
     if not os.path.exists(CSV_FILE):
         with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
-            csv.writer(f).writerow(['uid', 'username', 'password', 'avatar'])
+            csv.writer(f).writerow(headers)
+    else:
+        # 如果文件存在，检查是否需要迁移字段
+        rows = []
+        needs_migration = False
+        with open(CSV_FILE, mode='r', encoding='utf-8') as f:
+            reader = csv.reader(f)
+            all_data = list(reader)
+            if all_data:
+                current_headers = all_data[0]
+                # 检查是否有新字段
+                if 'last_ip' not in current_headers:
+                    needs_migration = True
+                    # 重建数据
+                    rows = all_data[1:]  # 除去旧表头
 
+        if needs_migration:
+            print("[DB] Migrating CSV to new format...")
+            with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                for row in rows:
+                    # 补齐缺少的列 (last_ip, last_seen)
+                    while len(row) < 6:
+                        row.append('')
+                    writer.writerow(row)
+
+
+def update_user_status_in_csv(uid, ip=None, last_seen=None):
+    users = []
+    with open(CSV_FILE, mode='r', encoding='utf-8') as f:
+        users = list(csv.DictReader(f))
+
+    updated = False
+    for row in users:
+        if row['uid'] == uid:
+            if ip: row['last_ip'] = ip
+            if last_seen: row['last_seen'] = last_seen
+            updated = True
+            break
+
+    if updated:
+        with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
+            # 确保字段名与 init_db 一致
+            fieldnames = ['uid', 'username', 'password', 'avatar', 'last_ip', 'last_seen']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(users)
+    return users  # 返回最新列表以便广播
+
+
+def background_admin_refresh_task():
+    """
+    每 10 秒从数据库(CSV)读取一次最新的用户列表，
+    结合当前的内存在线状态，推送给管理员界面。
+    """
+    while True:
+        time.sleep(10)
+        try:
+            # print("[ADMIN SYNC] Refreshing user list from DB...") # 调试用
+            broadcast_full_user_list_to_admin()
+        except Exception as e:
+            print(f"[ADMIN SYNC ERROR] {e}")
+
+
+@socketio.on('client_logout')
+def handle_client_logout():
+    sid = request.sid
+    if sid in clients:
+        uid = clients[sid].get('uid')
+        username = clients[sid].get('username')
+
+        # 立即更新数据库：记录最后在线时间
+        if uid:
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            update_user_status_in_csv(uid, last_seen=ts)
+
+            # 从在线映射表中移除 (标记为离线)
+            if uid in uid_to_sid:
+                del uid_to_sid[uid]
+
+        # 清除当前连接的认证状态
+        clients[sid]['verified'] = False
+        clients[sid]['uid'] = ''
+        clients[sid]['username'] = 'Guest'
+        clients[sid]['avatar'] = ''
+
+        print(f"[LOGOUT] User {username} ({uid}) logged out.")
+
+        # 立即广播更新给所有人 (侧边栏) 和 管理员 (详细列表)
+        broadcast_user_list()
+        broadcast_full_user_list_to_admin()
+
+
+def broadcast_full_user_list_to_admin():
+    users = get_all_users()  # 读取 CSV
+
+    # 标记当前在线状态
+    admin_view_list = []
+    online_uids = list(uid_to_sid.keys())
+
+    for u in users:
+        is_online = u['uid'] in online_uids
+        admin_view_list.append({
+            'uid': u['uid'],
+            'username': u['username'],
+            'avatar': u.get('avatar', ''),
+            'ip': u.get('last_ip', 'Unknown'),
+            'last_seen': u.get('last_seen', 'Never'),
+            'status': 'online' if is_online else 'offline'
+        })
+
+    socketio.emit('admin_user_list_update', admin_view_list, to='admin_room')
 
 def get_all_users():
     if not os.path.exists(CSV_FILE): return []
@@ -204,9 +318,24 @@ def get_all_users():
 
 
 def save_all_users(users):
+    """
+    保存所有用户数据到 CSV。
+    修复：添加了 'last_ip' 和 'last_seen' 字段，防止修改个人资料时丢失在线状态数据。
+    """
+    # 必须包含所有6个字段，与 init_db 和 update_user_status_in_csv 保持一致
+    fieldnames = ['uid', 'username', 'password', 'avatar', 'last_ip', 'last_seen']
+
     with open(CSV_FILE, mode='w', newline='', encoding='utf-8') as f:
-        writer = csv.DictWriter(f, fieldnames=['uid', 'username', 'password', 'avatar'])
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
+
+        # 确保每个 user 字典里都有这两个键，防止因旧数据缺失导致报错
+        for user in users:
+            if 'last_ip' not in user:
+                user['last_ip'] = ''
+            if 'last_seen' not in user:
+                user['last_seen'] = ''
+
         writer.writerows(users)
 
 
@@ -224,8 +353,10 @@ def add_user_to_csv(username, password):
     for row in users:
         if row['username'] == username: return False, None
     new_uid = ''.join(random.choices(string.digits, k=6))
+
+    # 写入完整字段
     with open(CSV_FILE, mode='a', newline='', encoding='utf-8') as f:
-        csv.writer(f).writerow([new_uid, username, password, ''])
+        csv.writer(f).writerow([new_uid, username, password, '', '', ''])
     return True, new_uid
 
 
@@ -266,6 +397,15 @@ def save_reaction_to_csv(msg_id, reaction_type):
         print(f"[REACTION SAVE ERROR] {e}")
 
 #   Flask 路由
+
+@app.after_request
+def add_header(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    response.headers['Access-Control-Allow-Methods'] = 'GET,PUT,POST,DELETE,OPTIONS'
+    return response
+
+
 @app.route('/')
 def index(): return "Server is running."
 
@@ -278,7 +418,6 @@ def admin_ui(): return render_template('server_ui.html')
 def serve_media(filename):
     return send_from_directory(MEDIA_DIR, filename)
 
-
 @app.route('/uploads/avatars/<path:filename>')
 def serve_avatar(filename):
     return send_from_directory(AVATAR_DIR, filename)
@@ -286,15 +425,24 @@ def serve_avatar(filename):
 
 @app.route('/api/avatar/<uid>')
 def serve_avatar_by_uid(uid):
-    """UID -> 头像文件重定向"""
+    """UID -> 直接返回头像文件内容"""
     users = get_all_users()
+    target_avatar_path = None
+
     for row in users:
         if row['uid'] == uid:
             if row['avatar']:
-                return redirect(row['avatar'])
-            else:
-                break
-    return "No Avatar", 404
+                # row['avatar'] 存的是 "/uploads/avatars/file_xxx.png"
+                # 我们需要提取文件名
+                target_avatar_path = row['avatar'].split('/')[-1]
+            break
+
+    if target_avatar_path:
+        # 直接调用 send_from_directory 发送文件
+        return send_from_directory(AVATAR_DIR, target_avatar_path)
+    else:
+        # 如果没有头像，返回 404
+        return jsonify({'error': 'No Avatar'}), 404
 
 
 @app.route('/api/upload_media', methods=['POST', 'OPTIONS'])
@@ -323,13 +471,13 @@ def upload_media_http():
 
     file = request.files['file']
 
-    # 服务端强校验：300KB = 300 * 1024 bytes
+    # 服务端强校验
     file.seek(0, os.SEEK_END)
     size = file.tell()
     file.seek(0)  # 检查完大小把指针移回开头
 
-    if size > 300 * 1024:
-        return jsonify({'status': 'error', 'msg': 'Server Reject: File too large (>300KB)'}), 400
+    if size > 4 * 1024 * 1024:
+        return jsonify({'status': 'error', 'msg': 'Server Reject: File too large (>4MB)'}), 400
 
     try:
         file.save(file_path)
@@ -382,23 +530,51 @@ def handle_connect():
     emit('admin_update_client_list', clients, to='admin_room')
 
 
+@socketio.on('client_report_status')
+def handle_client_report(data):
+    sid = request.sid
+    client = clients.get(sid)
+    if client and client.get('verified'):
+        uid = client['uid']
+        ip = data.get('ip')
+        ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # 更新内存
+        clients[sid]['real_ip'] = ip
+
+        # 更新数据库
+        update_user_status_in_csv(uid, ip=ip, last_seen=ts)
+
+        # 通知 Admin
+        broadcast_full_user_list_to_admin()
+
+
 @socketio.on('disconnect')
 def handle_disconnect():
     if request.sid in clients:
         uid = clients[request.sid].get('uid')
+        if uid:
+            # 记录最后离线时间
+            ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            update_user_status_in_csv(uid, last_seen=ts)
+
         if uid and uid in uid_to_sid: del uid_to_sid[uid]
         del clients[request.sid]
+
     broadcast_user_list()
+    broadcast_full_user_list_to_admin()
 
 
 @socketio.on('admin_join')
 def handle_admin_join():
     join_room('admin_room')
-    # 管理员连接时，读取 256 条全局历史
     global_folder = os.path.join(LOGS_DIR, "global_chat")
     history = read_recent_logs(global_folder, limit=256)
     emit('admin_history_load', history, to='admin_room')
-    broadcast_user_list()
+
+    # 发送新的详细用户列表
+    broadcast_full_user_list_to_admin()
+    broadcast_user_list()  # 侧边栏旧逻辑保留
 
 
 
@@ -746,8 +922,15 @@ def handle_check_user(data):
     # 未找到
     emit('client_check_user_result', {'exists': False}, room=sid)
 
+
 if __name__ == '__main__':
     start_ngrok_and_upload()
+
+    # 启动后台刷新线程 (Daemon 线程随主程序退出)
+    refresh_thread = Thread(target=background_admin_refresh_task)
+    refresh_thread.daemon = True
+    refresh_thread.start()
+
     Timer(1.5, lambda: webbrowser.open('http://127.0.0.1:5005/admin')).start()
     print("SERVER STARTED ON 5005")
     socketio.run(app, host='0.0.0.0', port=5005, allow_unsafe_werkzeug=True)

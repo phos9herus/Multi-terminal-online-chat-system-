@@ -8,7 +8,7 @@ import requests
 import socket
 import base64
 from datetime import datetime
-from flask import Flask, render_template, request, send_from_directory, redirect, jsonify
+from flask import Flask, render_template, request, send_from_directory, redirect, jsonify, Response, stream_with_context
 from threading import *
 
 log = logging.getLogger('werkzeug')
@@ -202,7 +202,8 @@ def download_and_save_avatar(uid, server_path):
 
     try:
         # print(f"[SYNC] Downloading avatar for {uid} from {url}...")
-        response = requests.get(url, timeout=10)
+        headers = {"ngrok-skip-browser-warning": "true"}
+        response = requests.get(url, stream=True, timeout=20, headers=headers)
         if response.status_code == 200:
             user_dir = os.path.join(CLIENT_DATA_DIR, str(uid))
             if not os.path.exists(user_dir):
@@ -313,8 +314,9 @@ def cache_media_background(relative_path):
             path = relative_path.lstrip('/')
             url = f"{base}/{path}"
 
-            # print(f"[CACHE] Downloading {filename}...")
-            r = requests.get(url, stream=True, timeout=20)
+            print(f"[CACHE] Downloading {filename}...")
+            headers = {"ngrok-skip-browser-warning": "true"}
+            r = requests.get(url, stream=True, timeout=20, headers=headers)
             if r.status_code == 200:
                 with open(local_path, 'wb') as f:
                     for chunk in r.iter_content(chunk_size=8192):
@@ -412,7 +414,7 @@ def verification_failed(data): client_state['notification'] = data['msg']
 
 
 @app.route('/')
-def ui(): return render_template('client_ui.html', server_url=SERVER_URL, client_port=CLIENT_PORT)
+def ui(): return render_template('client_ui_chrome_fit.html', server_url=SERVER_URL, client_port=CLIENT_PORT)
 
 
 @app.route('/local_storage/<path:filename>')
@@ -602,8 +604,9 @@ def logout():
 def media_proxy():
     """
     前端图片 src 指向这里。
-    逻辑：有本地缓存 ? 返回本地文件 : 重定向到远程服务器
-    参数: ?path=/uploads/media/xxx.jpg
+    优先返回本地缓存。
+    本地无缓存 -> Python 向 Server 发请求 (带上跳过 Ngrok 警告的头) -> 转发数据流给浏览器。
+    不再使用 redirect，彻底解决 Chrome 加载 Ngrok 图片变成 HTML 警告页的问题。
     """
     path = request.args.get('path')
     if not path: return "", 404
@@ -611,19 +614,50 @@ def media_proxy():
     filename = os.path.basename(path)
     local_path = os.path.join(MEDIA_CACHE_DIR, filename)
 
-    # 检查本地缓存
+    # 检查本地缓存 (命中则返回)
     if os.path.exists(local_path) and os.path.getsize(local_path) > 0:
         return send_from_directory(MEDIA_CACHE_DIR, filename)
 
-    # 本地没有，尝试触发下载，并临时重定向到远程
-    cache_media_background(path)
-
+    # 本地没有，实时代理下载
     # 构造远程 URL
     base = SERVER_URL.rstrip('/')
     clean_path = path.lstrip('/')
     remote_url = f"{base}/{clean_path}"
 
-    return redirect(remote_url)
+    try:
+        # 添加 ngrok-skip-browser-warning 头，避免 Ngrok 弹警告页
+        headers = {
+            "ngrok-skip-browser-warning": "true",
+            "User-Agent": "CustomClient/1.0"
+        }
+
+        # 使用 stream=True 流式读取，减少内存占用
+        req = requests.get(remote_url, stream=True, headers=headers, timeout=10)
+
+        if req.status_code == 200:
+            # 保存到本地缓存 (后台写入，不阻塞返回)
+            def save_to_cache():
+                try:
+                    with open(local_path, 'wb') as f:
+                        for chunk in req.iter_content(chunk_size=8192):
+                            if chunk: f.write(chunk)
+                except:
+                    pass
+
+            # 这里为了简单，直接转发流。
+            # 如果想同时保存，稍微复杂点。为了性能和兼容性，建议只做转发，
+            # 缓存留给 cache_media_background 异步去做 (已经在 background 线程里)
+            # 或者在这里先同步下载完再发送。
+
+            # 直接转发流给浏览器
+            return Response(stream_with_context(req.iter_content(chunk_size=8192)),
+                            content_type=req.headers.get('Content-Type'))
+        else:
+            return "", 404
+
+    except Exception as e:
+        print(f"[PROXY ERROR] {e}")
+        return "", 404
 
 
 @app.route('/api/update_profile', methods=['POST'])
