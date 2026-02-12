@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Chat Client</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div id="notification-bar"><span id="notify-content"></span></div>
+
+    <div id="auth-overlay">
+        <div class="modal-box" style="text-align:center;">
+            <div id="login-halo" class="breathing-halo"><i class="fas fa-comments"></i></div>
+            <div id="login-status-indicator" style="margin-bottom: 20px; font-size: 0.85rem; font-weight: bold; color: #f39c12;"><i class="fas fa-circle-notch fa-spin"></i> Connecting to Server...</div>
+            <p style="color:#666; font-size:0.9rem; margin-bottom:25px;">Secure Terminal Login</p>
+            <input type="text" id="username" class="auth-input" placeholder="Username / UID">
+            <input type="password" id="password" class="auth-input" placeholder="Password">
+            <div style="display:flex; gap:10px; margin-bottom:15px;">
+                <input type="text" id="code" class="auth-input" placeholder="Code" style="margin-bottom:0; text-align:center;">
+                <button onclick="requestCode()" style="padding:0 15px; background:#e7f3ff; color:var(--primary-color); border:1px solid var(--primary-color); border-radius:8px; cursor:pointer; font-weight:600;">Get Code</button>
+            </div>
+            <button class="btn-full" onclick="doLogin()">Enter Chat</button>
+        </div>
+    </div>
+
+    <div class="app-container" id="app">
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <h2>Chats</h2>
+                <i class="fas fa-cog" style="cursor:pointer; color:#888; font-size:1.1rem;" onclick="openSettings()"></i>
+            </div>
+            <div class="user-profile-bar">
+                <img id="my-avatar-img" class="my-avatar" src="" onerror="this.src='https://ui-avatars.com/api/?name=Me'" onclick="openSettings()">
+                <div class="my-info">
+                    <div id="my-name-display" class="my-name">Guest</div>
+                    <div id="my-uid-display" class="my-uid">UID: ---</div>
+                </div>
+            </div>
+            <div class="chat-list" id="chat-tabs-container"></div>
+            <div class="friends-menu-btn" onclick="openFriendsModal()"><i class="fas fa-user-friends"></i> Friends Menu</div>
+        </div>
+
+        <div class="chat-area">
+            <div class="chat-header">
+                <div class="title" id="current-chat-title">Global Chat Room</div>
+                <div class="status-indicator"><i class="fas fa-circle" style="font-size:0.6rem;"></i> Online</div>
+            </div>
+            <div class="messages" id="msg-list"></div>
+            <div class="input-area">
+                <div id="quote-preview-bar" class="quote-preview-bar">
+                    <div style="display:flex; flex-direction:column; overflow:hidden; flex:1;">
+                        <span style="font-weight:bold; font-size:0.75rem; color:var(--primary-color); margin-bottom:2px;"><i class="fas fa-reply"></i> Replying to <span id="quote-preview-sender">User</span></span>
+                        <span id="quote-preview-text" class="quote-preview-content">...</span>
+                    </div>
+                    <button class="quote-close-btn" onclick="cancelQuote()"><i class="fas fa-times-circle"></i></button>
+                </div>
+                <button class="icon-btn" onclick="document.getElementById('media-upload').click()"><i class="fas fa-plus-circle"></i></button>
+                <input type="file" id="media-upload" hidden accept="image/*,video/*" onchange="handleMediaUpload(this)">
+                <input type="text" class="msg-input" id="msg-text" placeholder="Type a message..." onkeypress="if(event.key==='Enter') sendMsg()">
+                <button class="icon-btn" onclick="sendMsg()"><i class="fas fa-paper-plane"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="user-card-overlay" onclick="closeUserCard()" style="display:none;">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <div class="uc-header">
+                <img id="uc-avatar" class="uc-avatar" src="">
+                <div class="uc-info"><div id="uc-username" class="uc-username">Username</div><div id="uc-uid" class="uc-uid">UID: ---</div></div>
+            </div>
+            <div class="uc-actions">
+                <button class="uc-btn" style="background:#e4e6eb; color:#000;" onclick="addFriendAction()"><i class="fas fa-user-plus"></i> Add Friend</button>
+                <button class="uc-btn" style="background:var(--primary-color); color:#fff;" onclick="startPrivateChatFromCard()"><i class="fas fa-comment-dots"></i> Message</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="friends-modal" onclick="closeFriendsModal()" style="display:none;">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <h3 style="margin-top:0;">My Friends</h3>
+            <div id="friends-list-container" style="max-height: 300px; overflow-y:auto;"></div>
+            <button class="btn-full" style="margin-top:15px; background:#eee; color:#333;" onclick="closeFriendsModal()">Close</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay" id="settings-modal" onclick="closeSettings()" style="display:none;">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <h3 style="margin-top:0; text-align:center;">Settings</h3>
+            <div class="avatar-upload-container">
+                <div class="avatar-preview-wrapper" onclick="document.getElementById('st-avatar-input').click()">
+                    <img id="settings-avatar-preview" class="avatar-preview-img" src="">
+                    <div class="avatar-overlay"><i class="fas fa-camera"></i></div>
+                </div>
+                <input type="file" id="st-avatar-input" accept="image/*" hidden onchange="uploadAvatarImmediately(this)">
+            </div>
+            <input type="text" id="st-username" class="auth-input" placeholder="New Username">
+            <input type="password" id="st-password" class="auth-input" placeholder="New Password" oninput="checkPasswordInput()">
+            <label style="font-size: 0.8rem; color: #666; display: block; margin-bottom: 5px; margin-top: 10px;">Chat History Limit</label>
+            <input type="number" id="st-history-limit" class="auth-input" placeholder="128" value="128">
+            <div style="border-top: 1px solid #eee; margin: 15px 0; padding-top: 15px;">
+                <label style="font-size: 0.8rem; color: #666; display: block; margin-bottom: 5px;">Verification Code (For Password Change)</label>
+                <input type="text" id="st-code" class="auth-input" placeholder="Enter Code">
+                <button id="btn-settings-code" onclick="requestCode()" class="btn-full" style="margin-bottom: 10px; background:#e7f3ff; color:var(--primary-color); border: 1px solid var(--primary-color);" disabled>Get Verification Code</button>
+            </div>
+            <div id="st-error-msg" style="color:red; font-size:12px; margin-bottom:10px; display:none;">Need code to change password</div>
+            <button class="btn-full" onclick="saveProfile()" style="background:#2ecc71;">Save Changes</button>
+            <button class="btn-full btn-danger" onclick="doLogout()">Logout</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script>
+        // 将 Jinja2 变量传递给外部 JS 脚本
+        const APP_CONFIG = {
+            SERVER_URL: "{{ server_url }}",
+            CLIENT_PORT: "{{ client_port }}"
+        };
+    </script>
+    <script src="{{ url_for('static', filename='js/script.js') }}"></script>
+</body>
+</html>
