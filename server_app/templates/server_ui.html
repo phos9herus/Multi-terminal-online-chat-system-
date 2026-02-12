@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Server Admin Panel</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+</head>
+<body>
+    <div class="col-users">
+        <div class="section-header">
+            <span>User Management</span>
+            <i class="fas fa-users" style="color:#7f8c8d;"></i>
+        </div>
+        <div class="list-container" id="user-list">
+            <div style="text-align:center; color:#666; margin-top:20px;">Waiting for data...</div>
+        </div>
+    </div>
+
+    <div class="col-rooms">
+        <div class="section-header">
+            <span>Monitor Rooms</span>
+            <i class="fas fa-desktop" style="color:#7f8c8d;"></i>
+        </div>
+        <div class="list-container" id="room-list"></div>
+    </div>
+
+    <div class="col-chat">
+        <div class="section-header" id="chat-header">Global Chat</div>
+        <div class="chat-container" id="chat-box"></div>
+        <div class="input-area">
+            <input type="text" id="admin-input" placeholder="Type message (@UID to whisper)..." onkeypress="if(event.key==='Enter') sendAdminMsg()">
+            <button onclick="sendAdminMsg()">Send</button>
+        </div>
+    </div>
+
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="{{ url_for('static', filename='js/admin.js') }}"></script>
+</body>
+</html>
